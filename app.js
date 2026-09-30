@@ -1,5 +1,6 @@
 'use strict';
-const APP_VERSION = '1'; // меняй вместе с ?v= в index.html
+const APP_VERSION = '2';
+window.PREDICT_LOADED = true; // меняй вместе с ?v= в index.html
 const tg = window.Telegram && window.Telegram.WebApp;
 try { tg.ready(); tg.expand(); tg.setHeaderColor('#0b0c0a'); tg.setBackgroundColor('#0b0c0a'); } catch (_) {}
 
@@ -51,9 +52,13 @@ async function call(action, payload) {
   try {
     let j;
     try {
-      const r = await fetch(API, { method: 'POST', body: JSON.stringify(Object.assign({ action, auth: AUTH }, payload || {})) });
+      // не ждём бесконечно: через 30 секунд — понятная ошибка вместо вечной «Загрузки»
+      const ctrl = window.AbortController ? new AbortController() : null;
+      const timer = ctrl && setTimeout(() => ctrl.abort(), 30000);
+      const r = await fetch(API, { method: 'POST', body: JSON.stringify(Object.assign({ action, auth: AUTH }, payload || {})), signal: ctrl ? ctrl.signal : undefined });
+      clearTimeout(timer);
       j = await r.json();
-    } catch (_) { j = { error: 'Нет связи с сервером' }; }
+    } catch (_) { j = { error: 'Нет связи с сервером. Закрой окно и открой ссылку ещё раз.' }; }
     if (j.error) throw new Error(j.error);
     if (!j.same) { S = j; render(); }
     return j;
