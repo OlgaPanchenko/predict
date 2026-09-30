@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = '3';
+const APP_VERSION = '4';
 window.PREDICT_LOADED = true; // меняй вместе с ?v= в index.html
 const tg = window.Telegram && window.Telegram.WebApp;
 try { tg.ready(); tg.expand(); tg.setHeaderColor('#0b0c0a'); tg.setBackgroundColor('#0b0c0a'); } catch (_) {}
@@ -94,7 +94,7 @@ function renderInner() {
 }
 document.addEventListener('focusout', () => setTimeout(() => { if (pending) render(); }, 0));
 
-function head(sub) {
+function topBar(sub) {
   return `<div class="bar"><img class="logo" src="logo.png" alt="Mafia News Drop"><span class="sub"><b>Прогнозы</b>${sub ? esc(sub) : 'на турниры'}</span></div>`;
 }
 
@@ -109,7 +109,7 @@ function renderHome() {
       <span class="ev-foot">${mine}${S.me.isAdmin ? `<span class="muted">Прогнозов: ${e.count}</span>` : ''}</span>
     </button>`;
   }).join('');
-  return head() + `
+  return topBar() + `
     <div class="intro"><h1>Угадай призёров турнира</h1>
       <p class="muted">Выбери тройку призёров или топ-10 игроков по порядку. Прогноз делается один раз — изменить его нельзя, чужие прогнозы никто не видит. После турнира покажем, кто угадал.</p></div>
     ${S.me.isAdmin ? '<button class="btn primary" data-act="new">Новый прогноз</button>' : ''}
@@ -120,7 +120,7 @@ function renderHome() {
 function renderForm() {
   const f = ui.form;
   const players = parseList(f.text);
-  return head('новый прогноз') + `
+  return topBar('новый прогноз') + `
     <button class="back" data-act="home">← Назад</button>
     <div class="card"><h3>Новый прогноз</h3>
       <input class="field" data-f="title" placeholder="Название турнира" value="${esc(f.title)}">
@@ -159,7 +159,7 @@ function renderEvent(ev) {
 
   if (S.me.isAdmin) body += adminCard(ev);
 
-  return head(ev.modeLabel) + `
+  return topBar(ev.modeLabel) + `
     <button class="back" data-act="home">← Все прогнозы</button>
     <div class="ev-head"><span class="status ${cls}">${st}</span><h1>${esc(ev.title)}</h1>
       <p class="muted">${ev.need === 3 ? 'Угадай тройку призёров: кто займёт 1, 2 и 3 место.' : 'Угадай топ-10 игроков турнира в правильном порядке.'}</p></div>
