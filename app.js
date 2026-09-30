@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = '5';
+const APP_VERSION = '7';
 window.PREDICT_LOADED = true; // меняй вместе с ?v= в index.html
 const tg = window.Telegram && window.Telegram.WebApp;
 try { tg.ready(); tg.expand(); tg.setHeaderColor('#0b0c0a'); tg.setBackgroundColor('#0b0c0a'); } catch (_) {}
@@ -165,6 +165,7 @@ function renderEvent(ev) {
   let body = '';
 
   if (ev.status === 'done') body += resultsTable(ev) + winnersCard(ev);
+  if (ev.stats && ev.stats.count) body += statsCard(ev);
 
   // прогноз зрителя
   if (ev.my) body += myCard(ev);
@@ -259,6 +260,60 @@ function winnersCard(ev) {
   </div>`;
 }
 
+/** Как голосовали зрители — тоже самостоятельная карточка для скриншота. */
+function statsCard(ev) {
+  const st = ev.stats, total = st.count, nm = p => esc(ev.players[p - 1]);
+  const pct = n => Math.round(n / total * 100);
+  const bar = (n, hit) => `<span class="s-bar"><i style="width:${Math.max(4, pct(n))}%" class="${hit ? 'hit' : ''}"></i></span><b class="s-pct">${pct(n)}%</b>`;
+  const res = ev.results;
+  let body = '', agree = '';
+  if (st.places) {
+    // по каждому месту — самый популярный выбор; для тройки ещё два варианта мельче
+    body = `<ol class="s-list">${st.places.map((cands, k) => {
+      if (!cands.length) return '';
+      const [a, ...rest] = cands, hit = res && res[k] === a.p;
+      return `<li>${mark(ev, k)}<div class="s-main"><div class="s-row"><span class="s-name">${nm(a.p)}${hit ? ' <span class="hit">✓</span>' : ''}</span>${bar(a.n, hit)}</div>
+        ${ev.mode === 'top3' && rest.length ? `<div class="s-alt">${rest.map(c => `${nm(c.p)} ${pct(c.n)}%`).join(' · ')}</div>` : ''}</div></li>`;
+    }).join('')}</ol>`;
+    if (res) {
+      const hits = st.places.filter((c, k) => c[0] && c[0].p === res[k]).length;
+      agree = `Выбор большинства угадал ${hits} из ${ev.need} мест`;
+    }
+  } else {
+    const shown = st.overall.slice(0, Math.max(ev.need + 3, 8));
+    body = `<p class="s-cap">Чаще всего выбирали</p><ol class="s-list">${shown.map(c => {
+      const hit = res && res.includes(c.p);
+      return `<li><div class="s-main"><div class="s-row"><span class="s-name">${nm(c.p)}${hit ? ' <span class="hit">✓</span>' : ''}</span>${bar(c.n, hit)}</div></div></li>`;
+    }).join('')}</ol>`;
+    if (res) {
+      const hits = st.overall.slice(0, ev.need).filter(c => res.includes(c.p)).length;
+      agree = `Выбор большинства угадал ${hits} из ${ev.need}`;
+    }
+  }
+  const fav = st.overall[0];
+  return `<div class="wcard stats" id="stats">
+    <div class="w-head"><img class="logo" src="logo.png" alt=""><span>Как голосовали зрители</span></div>
+    <h2>${esc(ev.title)}</h2>
+    <p class="w-sub">${esc(ev.modeLabel)} · прогнозов: ${total}</p>
+    ${fav ? `<div class="s-fav"><span>Фаворит зрителей</span><b>${nm(fav.p)}</b><em>в ${pct(fav.n)}% прогнозов</em></div>` : ''}
+    ${body}
+    ${agree ? `<p class="s-agree">${agree}</p>` : ''}
+    ${ev.status === 'open' ? '<p class="w-note">Видно только тебе, пока приём открыт.</p>' : ''}
+    <div class="w-foot"><span>${ev.status === 'open' ? 'Предварительно' : res ? 'После итогов' : 'Приём закрыт'}</span><span>Mafia News Drop</span></div>
+  </div>`;
+}
+
+/** Статистика текстом — для поста в канал. */
+function statsText(ev) {
+  const st = ev.stats, total = st.count, nm = p => ev.players[p - 1];
+  const pct = n => Math.round(n / total * 100) + '%';
+  const lines = [`Как голосовали зрители: ${ev.title}`, `Прогнозов: ${total}`, ''];
+  if (st.overall[0]) lines.push(`Фаворит зрителей — ${nm(st.overall[0].p)} (в ${pct(st.overall[0].n)} прогнозов)`, '');
+  if (st.places) st.places.forEach((c, k) => { if (c[0]) lines.push(`${k + 1}. ${nm(c[0].p)} — ${pct(c[0].n)}`); });
+  else st.overall.slice(0, Math.max(ev.need + 3, 8)).forEach(c => lines.push(`• ${nm(c.p)} — ${pct(c.n)}`));
+  return lines.join('\n');
+}
+
 function adminCard(ev) {
   const link = S.link ? `${S.link}?startapp=${ev.id}` : '';
   let btns = '';
@@ -269,12 +324,16 @@ function adminCard(ev) {
     <button class="btn danger" data-act="remove">Удалить прогноз</button>`;
   else if (ev.status === 'closed') btns = `
     <button class="btn primary" data-act="enterResults">Внести результаты турнира</button>
+    ${ev.stats && ev.stats.count ? '<button class="btn" data-act="copyStats">Скопировать статистику</button><button class="btn img" data-act="img" data-kind="stats">Картинка статистики</button>' : ''}
     <button class="btn" data-act="reopen">Открыть приём снова</button>
     <button class="btn danger" data-act="remove">Удалить прогноз</button>`;
   else btns = `
     <button class="btn primary" data-act="publish" ${S.channel ? '' : 'disabled'}>${ev.publishedAt ? 'Опубликовать в канал ещё раз' : 'Опубликовать в канал'}</button>
     ${S.channel ? '' : '<p class="muted">Чтобы публиковать, впиши CHANNEL_ID в свойства скрипта.</p>'}
     <button class="btn" data-act="copyPost">Скопировать текст итогов</button>
+    ${ev.stats && ev.stats.count ? '<button class="btn" data-act="copyStats">Скопировать статистику</button>' : ''}
+    <button class="btn img" data-act="img" data-kind="result">Картинка итогов</button>
+    ${ev.stats && ev.stats.count ? '<button class="btn img" data-act="img" data-kind="stats">Картинка статистики</button>' : ''}
     <button class="btn" data-act="enterResults">Исправить результаты</button>
     <button class="btn danger" data-act="archive">Убрать в архив</button>`;
   return `<div class="card admin"><h3>Админ</h3>
@@ -332,7 +391,10 @@ $app.addEventListener('click', async e => {
     case 'submit': {
       const names = ui.draft.arr.map((p, k) => `${k + 1}. ${ev.players[p - 1]}`).join('\n');
       if (!(await ask(`Твой прогноз:\n${names}\n\nИзменить его потом будет нельзя. Отправить?`))) break;
-      if (await act('submit', { ev: ev.id, picks: ui.draft.arr }, 'Прогноз принят!')) ui.draft = null, render();
+      if (await act('submit', { ev: ev.id, picks: ui.draft.arr }, 'Прогноз принят!')) {
+        ui.draft = null; render();
+        askWrite();
+      }
       break;
     }
     case 'close': if (await ask('Закрыть приём прогнозов? Новые прогнозы больше не принимаются.')) act('admin_close', { ev: ev.id }, 'Приём закрыт'); break;
@@ -347,6 +409,8 @@ $app.addEventListener('click', async e => {
     }
     case 'publish': if (await ask('Опубликовать итоги в канал?')) act('admin_publish', { ev: ev.id }); break;
     case 'copyPost': copy(ev.post, 'Текст итогов скопирован'); break;
+    case 'copyStats': copy(statsText(ev), 'Статистика скопирована'); break;
+    case 'img': makeImage(ev, el.dataset.kind); break;
     case 'copyLink': copy(`${S.link}?startapp=${ev.id}`, 'Ссылка скопирована — вставь её в пост'); break;
     case 'archive':
       if (await ask('Убрать в архив? Прогнозы зрителей удалятся из таблицы, итог останется на листе «Итоги».'))
@@ -358,6 +422,62 @@ $app.addEventListener('click', async e => {
       break;
   }
 });
+
+// ---------- картинка одной кнопкой ----------
+let h2c = null;
+function loadH2C() {
+  if (window.html2canvas) return Promise.resolve();
+  return h2c || (h2c = new Promise((ok, fail) => {
+    const sc = document.createElement('script'); sc.src = 'html2canvas.min.js?v=1';
+    sc.onload = ok; sc.onerror = () => { h2c = null; fail(new Error('Не загрузился модуль картинок')); };
+    document.head.appendChild(sc);
+  }));
+}
+/** Рисует карточку в PNG 1080 px шириной (квадратная подложка не нужна — Telegram показывает как есть). */
+async function makeImage(ev, kind) {
+  const src = document.getElementById(kind === 'stats' ? 'stats' : 'result');
+  if (!src) return toast('Нечего рисовать');
+  toast('Готовлю картинку…');
+  try {
+    await loadH2C();
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'position:fixed;left:-10000px;top:0;width:540px;padding:22px;background:#0b0c0a';
+    const clone = src.cloneNode(true); clone.removeAttribute('id'); clone.style.margin = '0';
+    wrap.appendChild(clone); document.body.appendChild(wrap);
+    await Promise.all([...wrap.querySelectorAll('img')].map(i => i.complete ? 0 : new Promise(r => { i.onload = i.onerror = r; })));
+    const canvas = await window.html2canvas(wrap, { scale: 2, backgroundColor: '#0b0c0a', logging: false });
+    wrap.remove();
+    showImage(ev, kind, canvas.toDataURL('image/png'));
+  } catch (e) { toast(e.message || 'Не получилось сделать картинку'); }
+}
+function showImage(ev, kind, data) {
+  const old = document.getElementById('imgview'); if (old) old.remove();
+  const box = document.createElement('div');
+  box.id = 'imgview';
+  box.innerHTML = `<div class="iv-inner"><img src="${data}" alt="">
+    <p class="muted center">На телефоне можно зажать картинку и сохранить. Или пусть бот пришлёт её:</p>
+    <button class="btn primary" data-iv="me">Прислать мне в Telegram</button>
+    ${S.channel ? '<button class="btn" data-iv="channel">Опубликовать в канал</button>' : ''}
+    <button class="btn" data-iv="close">Закрыть</button></div>`;
+  box.addEventListener('click', async e => {
+    const b = e.target.closest('[data-iv]'); if (!b) return;
+    if (b.dataset.iv === 'close') return box.remove();
+    if (b.dataset.iv === 'channel' && !(await ask('Опубликовать картинку в канал?'))) return;
+    b.disabled = true; b.textContent = 'Отправляю…';
+    const ok = await act('admin_image', { ev: ev.id, kind, to: b.dataset.iv, png: data.split(',')[1] });
+    if (ok) box.remove(); else { b.disabled = false; b.textContent = 'Попробовать ещё раз'; }
+  });
+  document.body.appendChild(box);
+}
+
+/** Разрешение боту писать в личку — без него не придёт уведомление об итогах. Спрашиваем один раз. */
+function askWrite() {
+  try {
+    const u = tg && tg.initDataUnsafe && tg.initDataUnsafe.user;
+    if (!u || u.allows_write_to_pm || !tg.isVersionAtLeast('6.9')) return;
+    setTimeout(() => tg.requestWriteAccess(ok => toast(ok ? 'Готово — пришлём итоги в личку' : 'Без разрешения итоги придётся смотреть самому')), 900);
+  } catch (_) {}
+}
 
 // ---------- старт ----------
 if (!API || API.includes('ВСТАВЬ_СЮДА')) {
