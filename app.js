@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = '4';
+const APP_VERSION = '5';
 window.PREDICT_LOADED = true; // меняй вместе с ?v= в index.html
 const tg = window.Telegram && window.Telegram.WebApp;
 try { tg.ready(); tg.expand(); tg.setHeaderColor('#0b0c0a'); tg.setBackgroundColor('#0b0c0a'); } catch (_) {}
@@ -43,6 +43,14 @@ async function copy(text, okMsg) {
   ta.remove();
 }
 const medal = k => k < 3 ? ['gold', 'silver', 'bronze'][k] : '';
+const ordered = ev => ev.mode !== 'stage';           // в «выходе в стадию» порядок не важен
+const mark = (ev, k) => ordered(ev) ? `<span class="place ${medal(k)}">${k + 1}</span>` : '<span class="place any">✓</span>';
+/** Что угадывают — одной строкой для экрана прогноза. */
+function goal(ev) {
+  if (ev.mode === 'top3') return 'Угадай тройку призёров: кто займёт 1, 2 и 3 место.';
+  if (ev.mode === 'top10') return 'Угадай топ-10 игроков турнира в правильном порядке.';
+  return ev.need === 1 ? `Угадай, кто пройдёт в стадию «${ev.stage}».` : `Угадай ${ev.need} игроков, которые пройдут в стадию «${ev.stage}». Порядок не важен.`;
+}
 const STATUS = { open: ['Приём открыт', 'live'], closed: ['Приём закрыт', ''], done: ['Итоги', 'done'] };
 
 // ---------- сервер ----------
@@ -128,10 +136,16 @@ function renderForm() {
       <div class="chips">
         <button class="chip ${f.mode === 'top3' ? 'on' : ''}" data-mode="top3">Тройка призёров</button>
         <button class="chip ${f.mode === 'top10' ? 'on' : ''}" data-mode="top10">Топ-10 по порядку</button>
+        <button class="chip ${f.mode === 'stage' ? 'on' : ''}" data-mode="stage">Кто пройдёт в стадию</button>
       </div>
+      ${f.mode === 'stage' ? `
+        <input class="field" data-f="stage" placeholder="Стадия, например: Финал" value="${esc(f.stage)}">
+        <p class="muted" style="margin:12px 0 0">Сколько игроков проходит</p>
+        <div class="chips">${[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => `<button class="chip ${f.count === n ? 'on' : ''}" data-count="${n}">${n}</button>`).join('')}</div>` : ''}
       <p class="muted">${f.mode === 'top3'
-        ? 'Итоги в двух списках: кто угадал тройку в точном порядке и кто угадал состав тройки.'
-        : 'Побеждает, кто угадал все 10 мест. Если таких нет — покажем лучших по числу угаданных мест.'}</p>
+        ? 'Итоги в двух списках: кто угадал тройку место в место и кто угадал всех призёров в другом порядке.'
+        : f.mode === 'top10' ? 'Побеждает, кто угадал все 10 мест. Если таких нет — покажем лучших по числу угаданных мест.'
+        : 'Порядок не важен. Побеждает, кто угадал всех прошедших. Если таких нет — покажем, кто угадал больше всех.'}</p>
       <textarea class="field paste" data-f="text" rows="8" placeholder="Игроки турнира — по одному в строке.\nМожно с номерами: 1. Ник, 2) Ник…">${esc(f.text)}</textarea>
       <p class="muted" id="cnt">Игроков в списке: ${players.length}</p>
       <button class="btn primary" data-act="create">Запустить прогноз</button>
@@ -150,7 +164,7 @@ function renderEvent(ev) {
   const name = i => ev.players[i - 1];
   let body = '';
 
-  if (ev.status === 'done') body += resultCard(ev);
+  if (ev.status === 'done') body += resultsTable(ev) + winnersCard(ev);
 
   // прогноз зрителя
   if (ev.my) body += myCard(ev);
@@ -162,23 +176,27 @@ function renderEvent(ev) {
   return topBar(ev.modeLabel) + `
     <button class="back" data-act="home">← Все прогнозы</button>
     <div class="ev-head"><span class="status ${cls}">${st}</span><h1>${esc(ev.title)}</h1>
-      <p class="muted">${ev.need === 3 ? 'Угадай тройку призёров: кто займёт 1, 2 и 3 место.' : 'Угадай топ-10 игроков турнира в правильном порядке.'}</p></div>
+      <p class="muted">${goal(ev)}</p></div>
     ${body}`;
 
   function myCard(ev) {
-    const res = ev.results;
+    const res = ev.results, sum = ev.summary || {};
     const rows = ev.my.picks.map((p, k) => {
-      let mark = '';
-      if (res) mark = res[k] === p ? '<span class="hit">✓</span>' : res.includes(p) && ev.need === 3 ? '<span class="near">в тройке</span>' : '<span class="miss">✗</span>';
-      return `<li><span class="place ${medal(k)}">${k + 1}</span><span class="pname">${esc(name(p))}</span>${mark}</li>`;
+      let m = '';
+      if (res) m = ordered(ev)
+        ? (res[k] === p ? '<span class="hit">✓</span>' : res.includes(p) && ev.mode === 'top3' ? '<span class="near">в тройке</span>' : '<span class="miss">✗</span>')
+        : (res.includes(p) ? '<span class="hit">прошёл ✓</span>' : '<span class="miss">✗</span>');
+      return `<li>${mark(ev, k)}<span class="pname">${esc(name(p))}</span>${m}</li>`;
     }).join('');
-    const hits = res ? ev.my.picks.filter((p, k) => res[k] === p).length : 0;
-    const sum = ev.summary || {};
-    const sameSet = res && ev.need === 3 && ev.my.picks.every(p => res.includes(p));
-    const win = !res ? '' : hits === ev.need ? (ev.need === 3 ? 'Ты угадал тройку в точном порядке!' : 'Ты угадал весь топ-10!')
-      : sameSet ? 'Ты угадал состав тройки!' : ev.need === 10 && !(sum.exact || []).length && hits && hits === sum.bestHits ? `Ты ближе всех: ${hits} из 10!` : '';
+    const hits = !res ? 0 : ordered(ev) ? ev.my.picks.filter((p, k) => res[k] === p).length : ev.my.picks.filter(p => res.includes(p)).length;
+    const sameSet = res && ev.mode === 'top3' && ev.my.picks.every(p => res.includes(p));
+    const best = !(sum.exact || []).length && hits && hits === sum.bestHits && ev.mode !== 'top3';
+    const win = !res ? '' : hits === ev.need
+      ? (ev.mode === 'top3' ? 'Ты угадал всю тройку — место в место!' : ev.mode === 'top10' ? 'Ты угадал весь топ-10!' : 'Ты угадал всех, кто прошёл!')
+      : sameSet ? 'Ты угадал всех призёров!' : best ? `Ты ближе всех: ${hits} из ${ev.need}!` : '';
     return `<div class="card"><h3>Твой прогноз</h3>${win ? `<p class="youwin">${win}</p>` : ''}<ol class="places">${rows}</ol>
-      <p class="muted">${res ? `Угадано мест: <b class="${hits ? 'hit' : ''}">${hits} из ${ev.need}</b>` : 'Прогноз принят. Изменить его нельзя — ждём итогов турнира.'}</p></div>`;
+      <p class="muted">${res ? `${ordered(ev) ? 'Угадано мест' : 'Угадано игроков'}: <b class="${hits ? 'hit' : ''}">${hits} из ${ev.need}</b>`
+        : 'Прогноз принят. Изменить его нельзя — ждём итогов турнира.'}</p></div>`;
   }
 }
 
@@ -192,10 +210,15 @@ function picker(ev, kind) {
   const d = ui.draft;
   const filled = d.arr.filter(Boolean).length;
   const slots = d.arr.map((p, k) => `<button class="slot ${p ? 'full' : ''}" data-slot="${k}">
-      <span class="place ${medal(k)}">${k + 1}</span><span class="pname">${p ? esc(ev.players[p - 1]) : '<span class="muted">выбери игрока</span>'}</span>${p ? '<span class="x">×</span>' : ''}</button>`).join('');
+      ${ordered(ev) ? `<span class="place ${medal(k)}">${k + 1}</span>` : `<span class="place any ${p ? '' : 'empty'}">${p ? '✓' : k + 1}</span>`}<span class="pname">${p ? esc(ev.players[p - 1]) : '<span class="muted">выбери игрока</span>'}</span>${p ? '<span class="x">×</span>' : ''}</button>`).join('');
   const isRes = kind === 'results';
-  return `<div class="card ${isRes ? 'res-edit' : ''}"><h3>${isRes ? 'Результаты турнира' : ev.need === 3 ? 'Твоя тройка призёров' : 'Твой топ-10'}</h3>
-    <p class="muted">${isRes ? 'Отметь, кто занял какое место.' : 'Нажимай на игроков по порядку: первый — 1 место, второй — 2 и так далее. Нажми на место, чтобы освободить его.'}</p>
+  const title = isRes ? (ordered(ev) ? 'Результаты турнира' : `Кто прошёл: ${ev.stage}`)
+    : ev.mode === 'top3' ? 'Твоя тройка призёров' : ev.mode === 'top10' ? 'Твой топ-10' : `Кто пройдёт: ${ev.stage}`;
+  const hint = isRes ? (ordered(ev) ? 'Отметь, кто занял какое место.' : `Отметь ${ev.need} игроков, которые прошли.`)
+    : ordered(ev) ? 'Нажимай на игроков по порядку: первый — 1 место, второй — 2 и так далее. Нажми на место, чтобы освободить его.'
+    : `Выбери ${ev.need} игроков — порядок не важен. Нажми на выбранного, чтобы убрать.`;
+  return `<div class="card ${isRes ? 'res-edit' : ''}"><h3>${esc(title)}</h3>
+    <p class="muted">${esc(hint)}</p>
     <div class="slots">${slots}</div>
     <input class="field" data-f="q" placeholder="Поиск по нику" value="${esc(ui.q)}" autocomplete="off">
     <div class="plist" id="plist">${playerList(ev)}</div>
@@ -211,25 +234,28 @@ function playerList(ev) {
     : `<p class="muted center">${q ? 'Никого не нашли' : 'Все места заполнены'}</p>`;
 }
 
-/** Карточка итогов — её удобно скриншотить для поста. */
-function resultCard(ev) {
-  const s = ev.summary || { exact: [], set: [], best: [], count: 0 };
-  const who = arr => `<ul class="winners">${arr.map(x => `<li>${esc(x.name)}${x.username ? ` <span class="muted">@${esc(x.username)}</span>` : ''}</li>`).join('')}</ul>`;
-  let win = '';
-  if (ev.need === 3) {
-    if (s.exact.length) win += `<h4>Угадали тройку в точном порядке · ${s.exact.length}</h4>${who(s.exact)}`;
-    if (s.set.length) win += `<h4>Угадали состав тройки · ${s.set.length}</h4>${who(s.set)}`;
-    if (!s.exact.length && !s.set.length) win += '<p class="nobody">Никто не угадал тройку призёров</p>';
-  } else if (s.exact.length) win += `<h4>Угадали весь топ-10 · ${s.exact.length}</h4>${who(s.exact)}`;
-  else if (s.best.length) win += `<p class="nobody">Точный топ-10 никто не угадал</p><h4>Ближе всех — ${s.bestHits} из 10 мест · ${s.best.length}</h4>${who(s.best)}`;
-  else win += '<p class="nobody">Никто не угадал ни одного места</p>';
-  return `<div class="result" id="result">
-    <div class="r-head"><img class="logo" src="logo.png" alt=""><span>Итоги прогноза</span></div>
+/** Результаты турнира — обычная карточка (в скриншот не идёт). */
+function resultsTable(ev) {
+  const title = ev.mode === 'top3' ? 'Призёры турнира' : ev.mode === 'top10' ? 'Топ-10 турнира' : `${ev.stage} — прошли`;
+  return `<div class="card"><h3>${esc(title)}</h3>
+    <ol class="places">${ev.results.map((p, k) => `<li>${mark(ev, k)}<span class="pname">${esc(ev.players[p - 1])}</span></li>`).join('')}</ol></div>`;
+}
+
+/** Победители — самостоятельная карточка для скриншота в пост: понятна без таблицы результатов. */
+function winnersCard(ev) {
+  const v = ev.verdict || { sections: [], note: '', nobody: 'Итоги ещё считаются' };
+  const s = ev.summary || { count: 0 };
+  const people = arr => `<ul class="w-names">${arr.map(x => `<li><span class="w-name">${esc(x.name)}</span>${x.username ? `<span class="w-user">@${esc(x.username)}</span>` : ''}</li>`).join('')}</ul>`;
+  const body = v.nobody
+    ? `<div class="w-nobody">${esc(v.nobody)}</div>`
+    : (v.note ? `<p class="w-note">${esc(v.note)}</p>` : '') + v.sections.map(sec =>
+        `<div class="w-sec"><div class="w-title"><span>${esc(sec.title)}</span><b>${sec.people.length}</b></div>${people(sec.people)}</div>`).join('');
+  return `<div class="wcard" id="result">
+    <div class="w-head"><img class="logo" src="logo.png" alt=""><span>Итоги прогноза</span></div>
     <h2>${esc(ev.title)}</h2>
-    <p class="r-sub">${ev.need === 3 ? 'Призёры турнира' : 'Топ-10 турнира'}</p>
-    <ol class="places big">${ev.results.map((p, k) => `<li><span class="place ${medal(k)}">${k + 1}</span><span class="pname">${esc(ev.players[p - 1])}</span></li>`).join('')}</ol>
-    <div class="r-win">${win}</div>
-    <p class="r-foot">Всего прогнозов: ${s.count}</p>
+    <p class="w-sub">${esc(ev.modeLabel)}</p>
+    ${body}
+    <div class="w-foot"><span>Всего прогнозов: <b>${s.count}</b></span><span>Mafia News Drop</span></div>
   </div>`;
 }
 
@@ -271,12 +297,13 @@ $app.addEventListener('input', e => {
 });
 
 $app.addEventListener('click', async e => {
-  const el = e.target.closest('[data-open],[data-act],[data-mode],[data-slot],[data-pl]');
+  const el = e.target.closest('[data-open],[data-act],[data-mode],[data-count],[data-slot],[data-pl]');
   if (!el) return;
   const ev = ui.ev && S.events.find(x => x.id === ui.ev);
 
   if (el.dataset.open) { ui.ev = el.dataset.open; ui.view = 'event'; ui.draft = null; haptic(); render(); window.scrollTo(0, 0); return; }
   if (el.dataset.mode) { ui.form.mode = el.dataset.mode; haptic(); return render(); }
+  if (el.dataset.count) { ui.form.count = +el.dataset.count; haptic(); return render(); }
   if (el.dataset.slot !== undefined) {
     const k = +el.dataset.slot;
     if (ui.draft.arr[k]) { ui.draft.arr[k] = null; haptic(); render(); }
@@ -291,12 +318,13 @@ $app.addEventListener('click', async e => {
 
   switch (el.dataset.act) {
     case 'home': ui.view = 'home'; ui.ev = null; ui.draft = null; render(); window.scrollTo(0, 0); break;
-    case 'new': ui.form = ui.form || { title: '', mode: 'top3', text: '' }; ui.view = 'form'; render(); break;
+    case 'new': ui.form = ui.form || { title: '', mode: 'top3', text: '', stage: 'Финал', count: 6 }; ui.view = 'form'; render(); break;
     case 'create': {
       const f = ui.form, players = parseList(f.text);
       if (!f.title.trim()) return toast('Укажи название турнира');
+      if (f.mode === 'stage' && !f.stage.trim()) return toast('Укажи стадию, например «Финал»');
       if (!(await ask(`Запустить прогноз «${f.title.trim()}»? Игроков: ${players.length}. После запуска список не меняется.`))) break;
-      if (await act('admin_create', { title: f.title, mode: f.mode, players }, 'Прогноз запущен')) {
+      if (await act('admin_create', { title: f.title, mode: f.mode, stage: f.stage, count: f.count, players }, 'Прогноз запущен')) {
         ui.form = null; ui.ev = S.events[0] && S.events[0].id; ui.view = 'event'; render();
       }
       break;
