@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = '2';
+const APP_VERSION = '3';
 window.PREDICT_LOADED = true; // меняй вместе с ?v= в index.html
 const tg = window.Telegram && window.Telegram.WebApp;
 try { tg.ready(); tg.expand(); tg.setHeaderColor('#0b0c0a'); tg.setBackgroundColor('#0b0c0a'); } catch (_) {}
@@ -66,6 +66,7 @@ async function call(action, payload) {
 }
 async function load(force) {
   if (inflight && S && !force) return;
+  if (!S) $app.innerHTML = '<div class="loading">Загрузка… связываюсь с сервером</div>';
   try { await call('state', { v: S && !force ? S.version : 0 }); }
   catch (e) { if (!S) $app.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 }
@@ -79,6 +80,11 @@ async function act(action, body, okMsg) {
 // ---------- рендер ----------
 let pending = false;
 function render() {
+  try { renderInner(); } catch (e) {
+    $app.innerHTML = `<div class="empty">Ошибка отображения: ${esc(e.message)}<br><small>версия ${APP_VERSION}</small></div>`;
+  }
+}
+function renderInner() {
   if (document.activeElement && document.activeElement.matches('#app input, #app textarea')) { pending = true; return; }
   pending = false;
   if (!S) return;
